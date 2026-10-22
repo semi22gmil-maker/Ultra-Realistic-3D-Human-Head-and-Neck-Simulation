@@ -1,0 +1,6 @@
+{
+  "name": "Ultra-Realistic 3D Human Head and Neck Simulation",
+  "description": "Interactive, anatomically accurate 3D human head and neck simulation with scientific white wireframe rendering, real-time ESP32/MPU6050 serial motion telemetry, and wheelchair head-motion control interface.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

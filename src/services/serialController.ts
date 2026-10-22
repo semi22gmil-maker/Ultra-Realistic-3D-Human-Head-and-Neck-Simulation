@@ -146,28 +146,35 @@ class SerialController {
     this.addLog('Serial connection closed. Switched to manual simulation.', 'info');
   }
 
+  private packetsReceived = 0;
+  private lastRawPacket = '';
+  private lastParsedPacket: ParsedSerialMessage | null = null;
+
+  public getPacketStats() {
+    return {
+      packetsReceived: this.packetsReceived,
+      lastRawPacket: this.lastRawPacket,
+      lastParsedPacket: this.lastParsedPacket
+    };
+  }
+
   /**
    * Continuous read loop for incoming serial bytes with newline buffer
    */
   private async readSerialLoop() {
     let lineBuffer = '';
+    const decoder = new TextDecoder();
 
     while (this.port && this.port.readable && this.keepReading) {
-      const textDecoder = new TextDecoderStream();
-      // @ts-ignore
-      const readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable);
-      this.reader = textDecoder.readable.getReader();
-
       try {
+        this.reader = this.port.readable.getReader();
         while (this.keepReading) {
           const { value, done } = await this.reader.read();
-          if (done) {
-            break;
-          }
+          if (done) break;
           if (value) {
-            lineBuffer += value;
-            const lines = lineBuffer.split(/\r?\n/);
-            // Keep the last partial string in the buffer
+            lineBuffer += decoder.decode(value, { stream: true });
+            // Split on any combination of \r\n, \n, or \r
+            const lines = lineBuffer.split(/\r\n|\n|\r/);
             lineBuffer = lines.pop() || '';
 
             for (const line of lines) {
@@ -188,6 +195,7 @@ class SerialController {
           try {
             this.reader.releaseLock();
           } catch (e) {}
+          this.reader = null;
         }
       }
     }
@@ -195,52 +203,56 @@ class SerialController {
 
   /**
    * Parse ESP32 text lines.
-   * Target format:
-   * dP=+18.5 dR=-2.4 | pMag=18.5 rMag=2.4 | CMD='F'
+   * Supports target protocol: dP=+18.5 dR=-2.4 | pMag=18.5 rMag=2.4 | CMD='F'
+   * Also intelligently supports:
+   * - Pitch: 12.3 Roll: -4.5
+   * - P: 12.3 R: -4.5
+   * - YPR: 0 12.3 -4.5 (MPU6050 DMP)
+   * - AcX/AcY/AcZ raw gravity vectors
+   * - Plain comma/space separated values: "12.3, -4.5"
    */
   public parseLine(line: string): ParsedSerialMessage | null {
     try {
+      // Strip non-printable ASCII noise (from baud rate sync or restarts)
+      const cleanLine = line.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ').trim();
+      if (!cleanLine) return null;
+
       // 1. Primary ESP32 MPU6050 format:
       // dP=+18.5 dR=-2.4 | pMag=18.5 rMag=2.4 | CMD='F'
-      const dpMatch = line.match(/dP\s*=\s*([+-]?\d+(?:\.\d+)?)/i);
-      const drMatch = line.match(/dR\s*=\s*([+-]?\d+(?:\.\d+)?)/i);
-      const cmdMatch = line.match(/CMD\s*=\s*['"]?([FBLRS])['"]?/i);
-      const pMagMatch = line.match(/pMag\s*=\s*([+-]?\d+(?:\.\d+)?)/i);
-      const rMagMatch = line.match(/rMag\s*=\s*([+-]?\d+(?:\.\d+)?)/i);
+      const dpMatch = cleanLine.match(/dP\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const drMatch = cleanLine.match(/dR\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const cmdMatch = cleanLine.match(/CMD\s*[:=]\s*['"]?([FBLRS])['"]?/i);
+      const pMagMatch = cleanLine.match(/pMag\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const rMagMatch = cleanLine.match(/rMag\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
 
       if (dpMatch && drMatch) {
         const pitch = parseFloat(dpMatch[1]);
         const roll = parseFloat(drMatch[1]);
-        let command: WheelchairCommand = 'S';
-        if (cmdMatch) {
-          command = cmdMatch[1].toUpperCase() as WheelchairCommand;
-        } else {
-          command = this.inferCommand(pitch, roll);
-        }
+        const command = cmdMatch ? (cmdMatch[1].toUpperCase() as WheelchairCommand) : this.inferCommand(pitch, roll);
 
         return {
           pitch,
           roll,
-          yaw: 0, // Yaw is not available on 6-axis MPU6050 gravity vector
+          yaw: 0,
           pitchMag: pMagMatch ? parseFloat(pMagMatch[1]) : Math.abs(pitch),
           rollMag: rMagMatch ? parseFloat(rMagMatch[1]) : Math.abs(roll),
           command,
-          rawString: line
+          rawString: cleanLine
         };
       }
 
-      // 2. Alternative CSV format: pitch,roll,yaw,cmd or pitch,roll
-      if (/^[+-]?\d+(\.\d+)?,[+-]?\d+/.test(line)) {
-        const parts = line.split(',').map(s => s.trim());
-        const pitch = parseFloat(parts[0]);
-        const roll = parseFloat(parts[1]);
-        const yaw = parts.length > 2 && !isNaN(parseFloat(parts[2])) ? parseFloat(parts[2]) : 0;
-        let command: WheelchairCommand = 'S';
-        if (parts.length > 3 && ['F', 'B', 'L', 'R', 'S'].includes(parts[3].toUpperCase())) {
-          command = parts[3].toUpperCase() as WheelchairCommand;
-        } else {
-          command = this.inferCommand(pitch, roll);
-        }
+      // 2. Named Pitch / Roll or P / R formats (in any order):
+      // e.g. "Pitch: 12.5 Roll: -3.4" or "Roll: -3.4, Pitch: 12.5" or "P=12.5 R=-3.4"
+      const namedPitchMatch = cleanLine.match(/(?:pitch|angle[_\s]?x|rot[_\s]?x|p)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const namedRollMatch = cleanLine.match(/(?:roll|angle[_\s]?y|rot[_\s]?y|r)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const namedYawMatch = cleanLine.match(/(?:yaw|angle[_\s]?z|rot[_\s]?z|y)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+
+      if (namedPitchMatch && namedRollMatch) {
+        const pitch = parseFloat(namedPitchMatch[1]);
+        const roll = parseFloat(namedRollMatch[1]);
+        const yaw = namedYawMatch ? parseFloat(namedYawMatch[1]) : 0;
+        const command = cmdMatch ? (cmdMatch[1].toUpperCase() as WheelchairCommand) : this.inferCommand(pitch, roll);
+
         return {
           pitch,
           roll,
@@ -248,16 +260,59 @@ class SerialController {
           pitchMag: Math.abs(pitch),
           rollMag: Math.abs(roll),
           command,
-          rawString: line
+          rawString: cleanLine
         };
       }
 
-      // 3. JSON format fallback: {"pitch": 12.3, "roll": -4.2, "cmd": "F"}
-      if (line.startsWith('{') && line.endsWith('}')) {
-        const json = JSON.parse(line);
-        const pitch = typeof json.pitch === 'number' ? json.pitch : (json.dP || 0);
-        const roll = typeof json.roll === 'number' ? json.roll : (json.dR || 0);
-        const yaw = typeof json.yaw === 'number' ? json.yaw : 0;
+      // 3. Raw Accelerometer values: AcX / AcY / AcZ (calculate pitch & roll via atan2)
+      // e.g. "AcX = 1200 | AcY = -450 | AcZ = 16000" or "ax: 0.12 ay: -0.04 az: 0.98"
+      const acXMatch = cleanLine.match(/(?:acx|accel[_\s]?x|ax)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const acYMatch = cleanLine.match(/(?:acy|accel[_\s]?y|ay)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+      const acZMatch = cleanLine.match(/(?:acz|accel[_\s]?z|az)\s*[:=]\s*([+-]?\d+(?:\.\d+)?)/i);
+
+      if (acXMatch && acYMatch && acZMatch) {
+        const ax = parseFloat(acXMatch[1]);
+        const ay = parseFloat(acYMatch[1]);
+        const az = parseFloat(acZMatch[1]);
+        const pitch = Math.atan2(-ax, Math.sqrt(ay * ay + az * az)) * (180.0 / Math.PI);
+        const roll = Math.atan2(ay, az) * (180.0 / Math.PI);
+
+        return {
+          pitch: +pitch.toFixed(1),
+          roll: +roll.toFixed(1),
+          yaw: 0,
+          pitchMag: Math.abs(pitch),
+          rollMag: Math.abs(roll),
+          command: this.inferCommand(pitch, roll),
+          rawString: cleanLine
+        };
+      }
+
+      // 4. MPU6050 DMP YPR format: "ypr: 0.00, 15.20, -3.40" or "ypr\t0.00\t15.20\t-3.40"
+      if (/ypr/i.test(cleanLine)) {
+        const numbers = cleanLine.match(/[+-]?\d+(?:\.\d+)?/g);
+        if (numbers && numbers.length >= 3) {
+          const yaw = parseFloat(numbers[0]);
+          const pitch = parseFloat(numbers[1]);
+          const roll = parseFloat(numbers[2]);
+          return {
+            pitch,
+            roll,
+            yaw,
+            pitchMag: Math.abs(pitch),
+            rollMag: Math.abs(roll),
+            command: this.inferCommand(pitch, roll),
+            rawString: cleanLine
+          };
+        }
+      }
+
+      // 5. JSON format fallback: {"pitch": 12.3, "roll": -4.2}
+      if (cleanLine.startsWith('{') && cleanLine.endsWith('}')) {
+        const json = JSON.parse(cleanLine);
+        const pitch = typeof json.pitch === 'number' ? json.pitch : (json.dP || json.p || 0);
+        const roll = typeof json.roll === 'number' ? json.roll : (json.dR || json.r || 0);
+        const yaw = typeof json.yaw === 'number' ? json.yaw : (json.y || 0);
         const command: WheelchairCommand = (json.cmd || json.CMD || this.inferCommand(pitch, roll)).toUpperCase();
         return {
           pitch,
@@ -266,8 +321,29 @@ class SerialController {
           pitchMag: Math.abs(pitch),
           rollMag: Math.abs(roll),
           command,
-          rawString: line
+          rawString: cleanLine
         };
+      }
+
+      // 6. CSV or space-separated numbers: "18.5, -2.4" or "18.5 -2.4"
+      const numMatches = cleanLine.match(/^[+-]?\d+(?:\.\d+)?(?:[\s,;]+[+-]?\d+(?:\.\d+)?)+/);
+      if (numMatches) {
+        const parts = cleanLine.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+        const nums = parts.map(Number).filter(n => !isNaN(n));
+        if (nums.length >= 2) {
+          const pitch = nums[0];
+          const roll = nums[1];
+          const yaw = nums.length >= 3 ? nums[2] : 0;
+          return {
+            pitch,
+            roll,
+            yaw,
+            pitchMag: Math.abs(pitch),
+            rollMag: Math.abs(roll),
+            command: this.inferCommand(pitch, roll),
+            rawString: cleanLine
+          };
+        }
       }
 
       return null;
@@ -289,10 +365,15 @@ class SerialController {
   }
 
   private handleIncomingLine(line: string) {
-    this.addLog(line, 'incoming');
+    this.packetsReceived++;
+    this.lastRawPacket = line;
     const parsed = this.parseLine(line);
     if (parsed) {
+      this.lastParsedPacket = parsed;
+      this.addLog(line, 'incoming');
       this.dataListeners.forEach(listener => listener(parsed));
+    } else {
+      this.addLog(`[Raw Unparsed] ${line}`, 'info');
     }
   }
 

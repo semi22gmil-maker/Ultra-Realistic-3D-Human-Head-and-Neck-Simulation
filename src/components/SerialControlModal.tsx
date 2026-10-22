@@ -179,15 +179,27 @@ export const SerialControlModal: React.FC<SerialControlModalProps> = ({
             </div>
           )}
 
-          {/* Protocol specification */}
-          <div className="bg-zinc-900/60 p-2.5 rounded border border-zinc-800/80 text-[11px] text-zinc-400 flex flex-col gap-1">
-            <span className="text-zinc-300 font-semibold">EXPECTED SERIAL PACKET PROTOCOL:</span>
-            <code className="text-emerald-400 bg-black/60 px-2 py-0.5 rounded border border-zinc-800 select-all">
-              dP=+18.5 dR=-2.4 | pMag=18.5 rMag=2.4 | CMD='F'
-            </code>
-            <span className="text-[10px] text-zinc-500">
-              Extracts <strong>dP</strong> (Pitch angle), <strong>dR</strong> (Roll angle), and <strong>CMD</strong> ('F'=Forward, 'B'=Backward, 'L'=Left, 'R'=Right, 'S'=Stop).
-            </span>
+          {/* Diagnostic status banner */}
+          <div className="bg-zinc-900/70 p-2.5 rounded border border-zinc-800 text-[11px] flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-zinc-300">
+              <span className="font-semibold">حالة الاتصال والبيانات المستلمة:</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono ${serialState === 'connected' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-zinc-800 text-zinc-400'}`}>
+                {serialState === 'connected' ? `متصل (الحزم: ${logs.filter(l => l.type === 'incoming').length})` : 'غير متصل'}
+              </span>
+            </div>
+            {serialState !== 'connected' ? (
+              <p className="text-zinc-400 text-[11px]">
+                👉 اضغط على <strong>CONNECT ESP32</strong> ثم اختر منفذ الـ COM الخاص بقطعتك في نافذة المتصفح المنبثقة.
+              </p>
+            ) : logs.filter(l => l.type === 'incoming').length === 0 ? (
+              <p className="text-amber-400/90 text-[11px]">
+                ⚠️ المنفذ مفتوح لكن لم تصل أية بيانات بعد. تأكد من أن الـ ESP32 يطبع عبر <code className="text-white bg-black px-1 rounded">Serial.println(...)</code> وتأكد من تطابق الـ Baud Rate (115200).
+              </p>
+            ) : (
+              <p className="text-emerald-400 text-[11px]">
+                ✓ تصل البيانات بنجاح من الحساس! يتم تدوير الرأس وفقاً لزوايا الميل.
+              </p>
+            )}
           </div>
         </div>
 

@@ -151,6 +151,29 @@ export default function App() {
         </div>
       </header>
 
+      {/* Prominent Sensor Connection Banner */}
+      {serialState !== 'connected' ? (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
+          <button
+            onClick={() => setShowSerialModal(true)}
+            className="bg-amber-950/90 hover:bg-amber-900 border border-amber-500/80 text-amber-200 px-4 py-1.5 rounded-full text-xs font-mono tracking-wider flex items-center gap-2 shadow-2xl backdrop-blur-md transition-all hover:scale-105"
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            <span>⚠️ الحساس غير متصل بالمتصفح — اضغط هنا لربط الـ ESP32 عبر USB (COM)</span>
+          </button>
+        </div>
+      ) : (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
+          <button
+            onClick={() => setShowSerialModal(true)}
+            className="bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/80 text-emerald-200 px-4 py-1.5 rounded-full text-xs font-mono tracking-wider flex items-center gap-2 shadow-2xl backdrop-blur-md"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span>🟢 الحساس متصل ويستقبل البيانات عبر USB | اضغط لعرض الشاشة</span>
+          </button>
+        </div>
+      )}
+
       {/* 3. Floating Minimal Heads-Up Display (Visible even when dock is collapsed) */}
       <div className="absolute top-16 left-4 z-10 pointer-events-none flex flex-col gap-1.5 font-mono text-[11px]">
         <div className="bg-black/70 border border-zinc-800 px-3 py-1.5 rounded-lg backdrop-blur-md flex items-center gap-3">

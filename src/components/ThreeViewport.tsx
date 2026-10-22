@@ -27,6 +27,8 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
   // Articulation references
   const rootRigGroupRef = useRef<THREE.Group | null>(null);
+  const cervicalPivotRef = useRef<THREE.Group | null>(null);
+  const cranialPivotRef = useRef<THREE.Group | null>(null);
   const skeletonRef = useRef<THREE.Skeleton | null>(null);
   const neckBoneRef = useRef<THREE.Bone | null>(null);
   const headBoneRef = useRef<THREE.Bone | null>(null);
@@ -279,22 +281,32 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
     const neckRatio = configRef.current.neckDistribution;
 
-    // 1. If we have rigged bones:
+    // 1. Dual-pivot anatomical cervical & cranial articulation (guarantees 100% visible movement):
+    if (cervicalPivotRef.current && cranialPivotRef.current) {
+      // Lower cervical spine (C7-C4) flexes/extends and tilts proportionally
+      cervicalPivotRef.current.rotation.x = pitchRad * neckRatio;
+      cervicalPivotRef.current.rotation.z = -rollRad * neckRatio;
+      cervicalPivotRef.current.rotation.y = yawRad * (neckRatio * 0.35);
+
+      // Upper atlanto-occipital cranial joint (C1/Head base) provides primary nod and gaze
+      cranialPivotRef.current.rotation.x = pitchRad * (1 - neckRatio);
+      cranialPivotRef.current.rotation.z = -rollRad * (1 - neckRatio);
+      cranialPivotRef.current.rotation.y = yawRad * (1 - (neckRatio * 0.35));
+    }
+
+    // 2. If the model has imported skeleton bones (e.g. from an uploaded rigged GLB):
     if (neckBoneRef.current && headBoneRef.current) {
-      // Neck bone takes proportional pitch and roll
       neckBoneRef.current.rotation.x = pitchRad * neckRatio;
       neckBoneRef.current.rotation.z = -rollRad * neckRatio;
       neckBoneRef.current.rotation.y = yawRad * (neckRatio * 0.4);
 
-      // Head bone takes remaining pitch/roll and primary yaw
       headBoneRef.current.rotation.x = pitchRad * (1 - neckRatio);
       headBoneRef.current.rotation.z = -rollRad * (1 - neckRatio);
       headBoneRef.current.rotation.y = yawRad * (1 - (neckRatio * 0.4));
-      return;
     }
 
-    // 2. Fallback if single pivot group:
-    if (rootRigGroupRef.current) {
+    // 3. Fallback direct pivot if dual-pivot not configured:
+    if (!cervicalPivotRef.current && rootRigGroupRef.current) {
       rootRigGroupRef.current.rotation.x = pitchRad;
       rootRigGroupRef.current.rotation.z = -rollRad;
       rootRigGroupRef.current.rotation.y = yawRad;
@@ -461,26 +473,24 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         skinWeights.push(w0 / sum, w1 / sum, w2 / sum, 0);
       }
 
-      rawGeo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
-      rawGeo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+      // Build Anatomical Cervical & Cranial Pivot Hierarchy
+      const cervicalPivot = new THREE.Group();
+      cervicalPivot.name = 'CervicalPivot_C7';
+      cervicalPivot.position.set(0, cyMin + cyHeight * 0.15, 0); // Base of cervical spine
+      rigRoot.add(cervicalPivot);
+      cervicalPivotRef.current = cervicalPivot;
 
-      // Build 3 Bones
-      const bone0 = new THREE.Bone(); // Base C7
-      bone0.name = 'Cervical_C7_Base';
-      bone0.position.y = cyMin;
+      const cranialPivot = new THREE.Group();
+      cranialPivot.name = 'CranialPivot_C1';
+      cranialPivot.position.set(0, cyHeight * 0.38, 0); // Atlanto-occipital skull joint
+      cervicalPivot.add(cranialPivot);
+      cranialPivotRef.current = cranialPivot;
 
-      const bone1 = new THREE.Bone(); // Mid-cervical C4
-      bone1.name = 'Cervical_C4_Mid';
-      bone1.position.y = cyHeight * 0.35;
-      bone0.add(bone1);
-
-      const bone2 = new THREE.Bone(); // Cranium C1 / Atlanto-Occipital
-      bone2.name = 'Cranium_C1_Head';
-      bone2.position.y = cyHeight * 0.32;
-      bone1.add(bone2);
-
-      const bones = [bone0, bone1, bone2];
-      const skeleton = new THREE.Skeleton(bones);
+      const headModelContainer = new THREE.Group();
+      headModelContainer.name = 'HeadModelContainer';
+      // Offset so the rotation pivots around ear canal / skull base
+      headModelContainer.position.set(0, -(cyMin + cyHeight * 0.15 + cyHeight * 0.38), 0);
+      cranialPivot.add(headModelContainer);
 
       // Core occlusion mesh (prevents back-facing wireframe clutter)
       const coreMat = new THREE.MeshStandardMaterial({
@@ -491,27 +501,19 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1
       });
-      const skinnedCoreMesh = new THREE.SkinnedMesh(rawGeo, coreMat);
-      skinnedCoreMesh.add(bone0);
-      skinnedCoreMesh.bind(skeleton);
-      activeMeshRef.current = skinnedCoreMesh;
-      rigRoot.add(skinnedCoreMesh);
+      const coreMesh = new THREE.Mesh(rawGeo, coreMat);
+      activeMeshRef.current = coreMesh;
+      headModelContainer.add(coreMesh);
 
-      // Overlay wireframe mesh (exact same geometry and skeleton binding for crisp line rendering)
+      // Overlay wireframe mesh (exact same geometry for crisp line rendering)
       const wireMat = new THREE.MeshBasicMaterial({
         color: 0xffffff,
         wireframe: true,
         transparent: false,
       });
-      const skinnedWireMesh = new THREE.SkinnedMesh(rawGeo, wireMat);
-      skinnedWireMesh.add(bone0);
-      skinnedWireMesh.bind(skeleton);
-      wireframeMeshRef.current = skinnedWireMesh;
-      rigRoot.add(skinnedWireMesh);
-
-      neckBoneRef.current = bone1;
-      headBoneRef.current = bone2;
-      skeletonRef.current = skeleton;
+      const wireMesh = new THREE.Mesh(rawGeo, wireMat);
+      wireframeMeshRef.current = wireMesh;
+      headModelContainer.add(wireMesh);
 
       boneNames.push('Cervical_C7_Base', 'Cervical_C4_Mid', 'Cranium_C1_Head');
     }

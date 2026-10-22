@@ -56,9 +56,11 @@ class HeadController {
 
   private initSerialBinding() {
     this.unsubSerial = serialController.subscribeData((msg: ParsedSerialMessage) => {
-      if (this.source === 'esp32_hardware' || this.source === 'esp32_simulated') {
-        this.setHardwareMotion(msg.pitch, msg.roll, msg.yaw || 0, msg.command);
+      // Automatically switch to hardware mode whenever data packets arrive
+      if (this.source !== 'esp32_hardware' && this.source !== 'esp32_simulated') {
+        this.source = serialController.isSimulating() ? 'esp32_simulated' : 'esp32_hardware';
       }
+      this.setHardwareMotion(msg.pitch, msg.roll, msg.yaw || 0, msg.command);
     });
 
     this.unsubSerialState = serialController.subscribeState((state) => {

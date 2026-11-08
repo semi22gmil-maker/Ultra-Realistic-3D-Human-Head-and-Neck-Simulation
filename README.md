@@ -22,6 +22,7 @@
 
 [📋 نبذة عن المشروع](#-نبذة-عن-المشروع) •
 [✨ المميزات الرئيسية](#-المميزات-الرئيسية) •
+[📸 لقطات شاشة للمحاكي](#-لقطات-شاشة-للمحاكي-ونظام-تتبع-الرؤية-simulation--tracking-showcase) •
 [🏗️ معمارية النظام ومسار البيانات](#-معمارية-النظام-ومسار-البيانات) •
 [🔌 المخطط الكهربائي وجدول التوصيل](#-المخطط-الكهربائي-وجدول-التوصيل) •
 [📡 بروتوكول الأوامر والقيادة](#-بروتوكول-الأوامر-والقيادة) •
@@ -73,6 +74,32 @@
   * زر طوارئ أحمر فيزيائي (`D32`) مع مانع ارتداد (Debounce) لقطع الحركة فوراً.
   * مؤقت أمان زمني (**Safety Timeout 3s**) لإيقاف الكرسي آلياً عند انقطاع بث الإشارة.
   * تنبيهات صوتية وبصرية متقطعة (Passive Buzzer `D4` و LED أحمر خافت `D2`).
+
+<br/>
+
+---
+
+## 📸 لقطات شاشة للمحاكي ونظام تتبع الرؤية (Simulation & Tracking Showcase)
+
+<div align="center">
+
+### 🖥️ 1. التوأم الرقمي ثلاثي الأبعاد ولوحة القياس الحركي عن بُعد (3D Digital Twin & Telemetry HUD)
+
+<p align="center">
+  <img src="./docs/images/simulator_3d_viewport.jpg" alt="3D Head & Neck Digital Twin Simulation HUD" width="95%" style="border-radius: 12px; border: 1px solid rgba(0,240,255,0.35); box-shadow: 0 6px 30px rgba(0,240,255,0.2);" />
+</p>
+<p align="center"><em>واجهة المحاكي ثلاثي الأبعاد توضح زوايا الرأس (Pitch / Roll / Yaw)، ومؤشر اتجاه بؤبؤ العين اللحظي، وأمر قيادة الكرسي النشط ('F' للأمام)، مع تدفق حزم البيانات السلكية واللاسلكية المباشرة.</em></p>
+
+<br/>
+
+### 👁️ 2. واجهة الرؤية الحاسوبية وتتبع بؤبؤ العين اللحظي (OpenCV Real-Time Eye & Pupil Tracking HUD)
+
+<p align="center">
+  <img src="./docs/images/eye_tracking_hud.jpg" alt="OpenCV Computer Vision Eye Tracking Window" width="95%" style="border-radius: 12px; border: 1px solid rgba(0,240,255,0.35); box-shadow: 0 6px 30px rgba(0,240,255,0.2);" />
+</p>
+<p align="center"><em>نافذة المعالجة البصرية المباشرة لكاميرا الويب: كشف الوجه ومربعات العينين، وتكبير عالي الدقة لمنطقة بؤبؤ العين مع شبكة توجيه مركزية (Centroid Reticle)، واستخراج أمر الالتفاف ('R' يمين) ونسبة انفراج الجفن لحساب فرملة الأمان الحيوي الذاتي.</em></p>
+
+</div>
 
 <br/>
 

@@ -1,5 +1,24 @@
 export type WheelchairCommand = 'F' | 'B' | 'L' | 'R' | 'S';
 
+export interface EyeTrackingData {
+  direction: 'Forward' | 'Backward' | 'Left' | 'Right' | 'Stop';
+  command: WheelchairCommand;
+  eyeCommand?: WheelchairCommand;
+  headCommand?: WheelchairCommand;
+  gazeX: number; // -1.0 (left) to +1.0 (right)
+  gazeY: number; // -1.0 (up) to +1.0 (down)
+  eyeOpen: boolean;
+  eyeOpenness?: number; // 0 to 100%
+  headRoll?: number; // Head roll in degrees (-35 to +35)
+  headPitch?: number; // Head pitch in degrees (-45 to +45)
+  headYaw?: number; // Head yaw in degrees (-50 to +50)
+  timestamp: number;
+  source: 'python_opencv' | 'browser_webcam' | 'simulated';
+  controlMode?: WheelchairControlMode;
+}
+
+export type WheelchairControlMode = 'head_only' | 'eye_only' | 'fused_head_eye';
+
 export interface MotionData {
   pitch: number;      // Filtered, calibrated pitch (-45 to +45 deg)
   roll: number;       // Filtered, calibrated roll (-35 to +35 deg)
@@ -9,12 +28,16 @@ export interface MotionData {
   rawYaw: number;
   pitchMag: number;
   rollMag: number;
-  command: WheelchairCommand;
+  command: WheelchairCommand;      // Effective motor command
+  headCommand?: WheelchairCommand; // Command derived strictly from head
+  eyeCommand?: WheelchairCommand;  // Command derived strictly from eye pupil
   commandConfidence?: number;
   timestamp: number;
+  eyeData?: EyeTrackingData;
+  controlMode?: WheelchairControlMode;
 }
 
-export type ControlSource = 'manual' | 'esp32_hardware' | 'esp32_simulated' | 'test_animation';
+export type ControlSource = 'manual' | 'esp32_hardware' | 'esp32_simulated' | 'test_animation' | 'camera_tracking';
 
 export type SerialState = 'disconnected' | 'connecting' | 'connected' | 'error' | 'unsupported';
 

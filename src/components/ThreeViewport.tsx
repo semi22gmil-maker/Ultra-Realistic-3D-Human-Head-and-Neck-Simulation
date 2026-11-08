@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { headController } from '../services/headController';
+import { eyeTrackingService } from '../services/eyeTrackingService';
 import { MotionData, SimulationConfig, ModelMetadata } from '../types';
 
 interface ThreeViewportProps {
@@ -29,6 +30,12 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
   const rootRigGroupRef = useRef<THREE.Group | null>(null);
   const cervicalPivotRef = useRef<THREE.Group | null>(null);
   const cranialPivotRef = useRef<THREE.Group | null>(null);
+  const leftEyeRef = useRef<THREE.Group | null>(null);
+  const rightEyeRef = useRef<THREE.Group | null>(null);
+  const leftEyelidRef = useRef<THREE.Mesh | null>(null);
+  const rightEyelidRef = useRef<THREE.Mesh | null>(null);
+  const leftGazeRayRef = useRef<THREE.Line | null>(null);
+  const rightGazeRayRef = useRef<THREE.Line | null>(null);
   const skeletonRef = useRef<THREE.Skeleton | null>(null);
   const neckBoneRef = useRef<THREE.Bone | null>(null);
   const headBoneRef = useRef<THREE.Bone | null>(null);
@@ -195,6 +202,36 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
       // Apply rotations to bone hierarchy / articulated head
       applyAnatomicalRotation(pitch, roll, yaw);
+
+      // Update 3D Eyeball Gaze Orientations & Eyelid/Pupil Blink State
+      const eyeData = eyeTrackingService.getLatestData();
+      if (leftEyeRef.current && rightEyeRef.current) {
+        // Broad gaze sweep: horizontal ±32 degrees, vertical ±26 degrees
+        const targetEyeY = eyeData.gazeX * 0.55;
+        const targetEyeX = eyeData.gazeY * 0.45;
+        const eyeDamp = Math.min(delta * 22, 0.95);
+
+        // Subject left eye (viewer's right)
+        leftEyeRef.current.rotation.y += ((0.03 + targetEyeY) - leftEyeRef.current.rotation.y) * eyeDamp;
+        leftEyeRef.current.rotation.x += (targetEyeX - leftEyeRef.current.rotation.x) * eyeDamp;
+
+        // Subject right eye (viewer's left)
+        rightEyeRef.current.rotation.y += ((-0.03 + targetEyeY) - rightEyeRef.current.rotation.y) * eyeDamp;
+        rightEyeRef.current.rotation.x += (targetEyeX - rightEyeRef.current.rotation.x) * eyeDamp;
+
+        // Eyelid blink animation (upper eyelid closes smoothly over eyeball)
+        const targetEyelidRot = eyeData.eyeOpen ? -Math.PI * 0.52 : 0;
+        if (leftEyelidRef.current && rightEyelidRef.current) {
+          leftEyelidRef.current.rotation.x += (targetEyelidRot - leftEyelidRef.current.rotation.x) * eyeDamp;
+          rightEyelidRef.current.rotation.x += (targetEyelidRot - rightEyelidRef.current.rotation.x) * eyeDamp;
+        }
+
+        // Forward gaze projection rays (dynamic indicator of gaze direction)
+        if (leftGazeRayRef.current && rightGazeRayRef.current) {
+          leftGazeRayRef.current.visible = eyeData.eyeOpen;
+          rightGazeRayRef.current.visible = eyeData.eyeOpen;
+        }
+      }
 
       // Update OrbitControls
       controls.update();
@@ -515,7 +552,112 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       wireframeMeshRef.current = wireMesh;
       headModelContainer.add(wireMesh);
 
-      boneNames.push('Cervical_C7_Base', 'Cervical_C4_Mid', 'Cranium_C1_Head');
+      // Add 3D Anatomical Eyeballs with Pupils, Eyelids, and Dynamic Gaze Articulation
+      // Anatomical dimensions fitted precisely to LeePerrySmith eye sockets (x: ±0.66, y: 1.67, z: 1.76)
+      const eyeRadius = 0.30;
+      const eyeGeo = new THREE.SphereGeometry(eyeRadius, 32, 32);
+      const scleraMat = new THREE.MeshStandardMaterial({
+        color: 0xf0f4f8,
+        roughness: 0.18,
+        metalness: 0.05,
+      });
+
+      // Biometric Cyan Iris Disc & Outer Ring
+      const irisOuterGeo = new THREE.RingGeometry(0.08, 0.165, 32);
+      const irisOuterMat = new THREE.MeshBasicMaterial({
+        color: 0x0284c7,
+        side: THREE.DoubleSide,
+      });
+      const irisInnerGeo = new THREE.RingGeometry(0.05, 0.082, 32);
+      const irisInnerMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        side: THREE.DoubleSide,
+      });
+
+      // Jet Black Pupil Center
+      const pupilGeo = new THREE.CircleGeometry(0.052, 28);
+      const pupilMat = new THREE.MeshBasicMaterial({
+        color: 0x020202,
+        side: THREE.DoubleSide,
+      });
+
+      // Specular Corneal Glint (Natural white reflection)
+      const glintGeo = new THREE.CircleGeometry(0.016, 16);
+      const glintMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+      });
+
+      // Upper Eyelid Shell for Realistic Palpebral Blink (closes over cornea)
+      const eyelidGeo = new THREE.SphereGeometry(eyeRadius * 1.025, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.52);
+      const eyelidMat = new THREE.MeshStandardMaterial({
+        color: 0x161920,
+        roughness: 0.7,
+        metalness: 0.1,
+        side: THREE.DoubleSide,
+      });
+
+      // Forward Gaze Laser Beam (indicates gaze direction clearly in 3D scene)
+      const gazeRayGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, eyeRadius * 0.99),
+        new THREE.Vector3(0, 0, eyeRadius + 2.5)
+      ]);
+      const gazeRayMat = new THREE.LineBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.65,
+      });
+
+      // Helper to build a complete eye assembly
+      const createEye = (isLeft: boolean) => {
+        const eyeGroup = new THREE.Group();
+        eyeGroup.name = isLeft ? 'LeftEyeball' : 'RightEyeball';
+        // Precise anatomical eye socket position
+        eyeGroup.position.set(isLeft ? 0.65 : -0.68, 1.67, 1.76);
+        eyeGroup.rotation.set(0, isLeft ? 0.03 : -0.03, 0);
+
+        // Eyeball core (sclera)
+        const sclera = new THREE.Mesh(eyeGeo, scleraMat);
+        eyeGroup.add(sclera);
+
+        // Iris & Pupil attached on front (+Z)
+        const irisOuter = new THREE.Mesh(irisOuterGeo, irisOuterMat);
+        irisOuter.position.set(0, 0, eyeRadius * 0.985);
+        const irisInner = new THREE.Mesh(irisInnerGeo, irisInnerMat);
+        irisInner.position.set(0, 0, eyeRadius * 0.988);
+        const pupil = new THREE.Mesh(pupilGeo, pupilMat);
+        pupil.position.set(0, 0, eyeRadius * 0.992);
+        const glint = new THREE.Mesh(glintGeo, glintMat);
+        glint.position.set(0.038, 0.038, eyeRadius * 0.996);
+        eyeGroup.add(irisOuter, irisInner, pupil, glint);
+
+        // Gaze Ray
+        const gazeRay = new THREE.Line(gazeRayGeo, gazeRayMat);
+        eyeGroup.add(gazeRay);
+
+        // Retractable Eyelid Shell
+        const eyelid = new THREE.Mesh(eyelidGeo, eyelidMat);
+        eyelid.rotation.x = -Math.PI * 0.52; // Default open
+        eyeGroup.add(eyelid);
+
+        return { eyeGroup, eyelid, gazeRay };
+      };
+
+      // Left Eyeball (anatomical left, viewer's right)
+      const leftEyeObj = createEye(true);
+      headModelContainer.add(leftEyeObj.eyeGroup);
+      leftEyeRef.current = leftEyeObj.eyeGroup;
+      leftEyelidRef.current = leftEyeObj.eyelid;
+      leftGazeRayRef.current = leftEyeObj.gazeRay;
+
+      // Right Eyeball (anatomical right, viewer's left)
+      const rightEyeObj = createEye(false);
+      headModelContainer.add(rightEyeObj.eyeGroup);
+      rightEyeRef.current = rightEyeObj.eyeGroup;
+      rightEyelidRef.current = rightEyeObj.eyelid;
+      rightGazeRayRef.current = rightEyeObj.gazeRay;
+
+      boneNames.push('Cervical_C7_Base', 'Cervical_C4_Mid', 'Cranium_C1_Head', 'Left_Eyeball', 'Right_Eyeball');
     }
 
     // Adjust scale so head is comfortably framed (approx 5.5 units tall)

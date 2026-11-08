@@ -1,5 +1,6 @@
-import { MotionData, SimulationConfig, CalibrationOffset, WheelchairCommand, ControlSource } from '../types';
+import { MotionData, SimulationConfig, CalibrationOffset, WheelchairCommand, ControlSource, EyeTrackingData } from '../types';
 import { serialController, ParsedSerialMessage } from './serialController';
+import { eyeTrackingService } from './eyeTrackingService';
 
 export type MotionListener = (data: MotionData) => void;
 
@@ -20,6 +21,9 @@ class HeadController {
     rollOffset: 0,
     yawOffset: 0,
   };
+
+  // Latest Eye Tracking Data
+  private latestEyeData: EyeTrackingData = eyeTrackingService.getLatestData();
 
   // Configuration
   private config: SimulationConfig = {
@@ -49,9 +53,52 @@ class HeadController {
   private lastCommand: WheelchairCommand = 'S';
   private unsubSerial: (() => void) | null = null;
   private unsubSerialState: (() => void) | null = null;
+  private unsubEye: (() => void) | null = null;
+
+  private lastHeadCommand: WheelchairCommand = 'S';
+  private lastEyeCommand: WheelchairCommand = 'S';
 
   constructor() {
     this.initSerialBinding();
+    this.initEyeBinding();
+  }
+
+  private initEyeBinding() {
+    this.unsubEye = eyeTrackingService.subscribe((eyeData) => {
+      this.latestEyeData = eyeData;
+      const mode = eyeTrackingService.getControlMode();
+
+      // In eye_only mode, eye gaze should NOT move the head!
+      // Head movement is only driven when in head_only or fused mode, or from hardware
+      const isCameraActive = eyeData.source === 'python_opencv' || eyeData.source === 'browser_webcam';
+      if (isCameraActive && this.source !== 'esp32_hardware' && this.source !== 'test_animation') {
+        if (this.source !== 'camera_tracking') {
+          this.source = 'camera_tracking';
+        }
+
+        if (mode !== 'eye_only') {
+          const p = typeof eyeData.headPitch === 'number' ? eyeData.headPitch : 0;
+          const r = typeof eyeData.headRoll === 'number' ? eyeData.headRoll : 0;
+          const y = typeof eyeData.headYaw === 'number' ? eyeData.headYaw : 0;
+
+          const calPitch = p - this.calibration.pitchOffset;
+          const calRoll = r - this.calibration.rollOffset;
+          const calYaw = y - this.calibration.yawOffset;
+
+          this.targetPitch = calPitch * this.config.sensitivity;
+          this.targetRoll = calRoll * this.config.sensitivity;
+          this.targetYaw = calYaw * this.config.sensitivity;
+        } else {
+          // In eye_only mode, keep head centered and calm
+          this.targetPitch = 0;
+          this.targetRoll = 0;
+          this.targetYaw = 0;
+        }
+      }
+
+      this.evaluateWheelchairCommand();
+      this.broadcastMotion();
+    });
   }
 
   private initSerialBinding() {
@@ -116,7 +163,11 @@ class HeadController {
       pitchMag: Math.abs(this.currentPitch),
       rollMag: Math.abs(this.currentRoll),
       command: this.lastCommand,
-      timestamp: Date.now()
+      headCommand: this.lastHeadCommand,
+      eyeCommand: this.latestEyeData.command,
+      timestamp: Date.now(),
+      eyeData: this.latestEyeData,
+      controlMode: eyeTrackingService.getControlMode()
     };
   }
 
@@ -266,24 +317,55 @@ class HeadController {
   }
 
   private evaluateWheelchairCommand() {
+    const mode = eyeTrackingService.getControlMode();
+    const eye = this.latestEyeData;
+
+    // 1. Determine Head Motion Direction from pitch and roll (100% separate)
     const p = this.currentPitch;
     const r = this.currentRoll;
     const thresh = this.config.threshold;
     const deadband = this.config.deadband;
 
-    if (Math.abs(p) <= deadband && Math.abs(r) <= deadband) {
+    let headCmd: WheelchairCommand = 'S';
+    if (Math.abs(p) > deadband || Math.abs(r) > deadband) {
+      if (Math.abs(p) >= Math.abs(r)) {
+        if (p >= thresh) headCmd = 'F';
+        else if (p <= -thresh) headCmd = 'B';
+      } else {
+        if (r <= -thresh) headCmd = 'L';
+        else if (r >= thresh) headCmd = 'R';
+      }
+    }
+    this.lastHeadCommand = headCmd;
+
+    // 2. Determine Eye Command (100% separate)
+    const eyeCmd: WheelchairCommand = eye.eyeOpen ? eye.command : 'S';
+    this.lastEyeCommand = eyeCmd;
+
+    // 3. Assign Effective Motor Driving Command according to selected Control Mode
+    if (mode === 'eye_only') {
+      // Driven STRICTLY and purely by eye pupil gaze!
+      this.lastCommand = eyeCmd;
+      return;
+    }
+
+    if (mode === 'head_only') {
+      // Driven STRICTLY and purely by head angles!
+      this.lastCommand = headCmd;
+      return;
+    }
+
+    // Fused Head & Eye Tracking mode:
+    if (!eye.eyeOpen) {
+      // Deadman safety brake: if eyes close, STOP immediately
       this.lastCommand = 'S';
       return;
     }
 
-    if (Math.abs(p) >= Math.abs(r)) {
-      if (p >= thresh) this.lastCommand = 'F';
-      else if (p <= -thresh) this.lastCommand = 'B';
-      else this.lastCommand = 'S';
+    if (eyeCmd !== 'S') {
+      this.lastCommand = eyeCmd;
     } else {
-      if (r <= -thresh) this.lastCommand = 'L';
-      else if (r >= thresh) this.lastCommand = 'R';
-      else this.lastCommand = 'S';
+      this.lastCommand = headCmd;
     }
   }
 
